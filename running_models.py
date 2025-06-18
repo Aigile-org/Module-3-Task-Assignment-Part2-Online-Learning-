@@ -917,49 +917,88 @@ def load_name_mapping(project_name):
 # Part 4: Main Execution Block
 # ==============================================================================
 if __name__ == '__main__':
+    # We use argparse to allow the GUI to pass parameters to this script
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Run Jira Issue Assigner Models.")
+    parser.add_argument(
+        '--mode', 
+        type=str, 
+        required=True, 
+        choices=['experiment', 'deploy'],
+        help="The mode to run the script in: 'experiment' or 'deploy'."
+    )
+    parser.add_argument(
+        '--train_project', 
+        type=str, 
+        default="AMBARI", 
+        help="For deploy mode: the project to use for training the model."
+    )
+    parser.add_argument(
+        '--test_file', 
+        type=str, 
+        default="My Scrum Project_test.csv", 
+        help="For deploy mode: the CSV file containing new issues to process."
+    )
+    parser.add_argument(
+        '--no_pretrained', 
+        action='store_true',
+        help="For deploy mode: add this flag to force retraining from scratch."
+    )
+    
+    args = parser.parse_args()
 
     # --- CHOOSE YOUR MODE ---
-    # Set to 'experiment' to run the full parallel simulations.
-    # Set to 'deploy' to run the interactive deployment simulation.
-    MODE = 'd' 
+    MODE = args.mode
 
-    if MODE == 'e':
+    if MODE == 'experiment':
         print("Script execution started in EXPERIMENT mode.")
-        # --- Your existing code for running parallel experiments ---
-        models_to_test = [MySuperEnhancedModel] # etc.
-        projects_to_process = [f[:-4] for f in os.listdir(DATA_FOLDER) if f.endswith(".csv")]
+        models_to_test = [MyNaiveBayesModel, MyNaiveBayesWithADWIN, HoeffdingAdaptiveTreeModel, LeveragingBaggingModel, PassiveAggressiveModel, MySuperEnhancedModel]
+        # Dynamically find all project CSVs in the data folder
+        try:
+            projects_to_process = [f[:-4] for f in os.listdir(DATA_FOLDER) if f.endswith(".csv") and "name_mapping" not in f]
+        except FileNotFoundError:
+            print(f"ERROR: Data folder '{DATA_FOLDER}' not found. Cannot run experiments.")
+            projects_to_process = []
+            
         if projects_to_process:
             experiment_tasks = [(m, p) for m in models_to_test for p in projects_to_process]
-            num_workers = min(mp.cpu_count(), 4)
+            num_workers = min(mp.cpu_count(), 6)
             print(f"Starting experiments in PARALLEL using {num_workers} worker processes...")
             with mp.Pool(processes=num_workers) as pool:
                 results_list = pool.starmap(run_single_experiment, experiment_tasks)
             print("\nAll experiments have finished.")
-            summary_data = {}
+            
+            # Collate and print results
+            summary_data = defaultdict(dict)
             for task, final_accuracy in zip(experiment_tasks, results_list):
                 model_class, project_name = task
                 model_name = model_class().name
-                if project_name not in summary_data:
-                    summary_data[project_name] = {}
                 summary_data[project_name][model_name] = final_accuracy
             print_summary_table(summary_data, models_to_test)
         else:
             print("No projects found to process. Halting execution.")
 
-    elif MODE == 'd':
+    elif MODE == 'deploy':
         print("Script execution started in DEPLOYMENT SIMULATION mode.")
         
-        # --- Configuration for the deployment simulation ---
-        PROJECT_FOR_TRAINING = "AMBARI" 
-        DEPLOYMENT_TEST_FILE = "My Scrum Project_test.csv"
+        # Use parameters passed from the GUI
+        PROJECT_FOR_TRAINING = args.train_project
+        DEPLOYMENT_TEST_FILE = args.test_file
+        
+        # The DATA_FOLDER for deployment mode is where the test CSV is located
         test_file_path = os.path.join(DATA_FOLDER, DEPLOYMENT_TEST_FILE)
         
-        # Run the interactive simulation
+        # The 'use_pretrained' flag is True unless --no_pretrained is passed
+        use_pretrained_model = not args.no_pretrained
+
         run_deployment_simulation(
             training_project=PROJECT_FOR_TRAINING,
             test_file_path=test_file_path,
-            use_pretrained=True  # Set to False to force retraining
+            use_pretrained=use_pretrained_model
         )
-
-    else:
-        print(f"Error: Unknown mode '{MODE}'. Please choose 'experiment' or 'deploy'.")
+    
+    # This keeps the terminal window open after the script finishes on Windows
+    # so you can read the output.
+    if os.name == 'nt':
+        os.system('pause')

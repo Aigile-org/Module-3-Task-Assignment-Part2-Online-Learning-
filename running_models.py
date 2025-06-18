@@ -12,9 +12,12 @@ import random
 import pickle 
 # River is the core online machine learning library
 from river import feature_extraction, compose, naive_bayes, multiclass, ensemble, drift, metrics,  linear_model ,tree
-
-
-DATA_FOLDER = "data/"
+from parametars import TEST
+# TEST = True
+if not TEST:
+    DATA_FOLDER = "data/"
+else:
+    DATA_FOLDER = "deploy and test\csvs"    
 RESULTS_FOLDER = "results_new_1/"
 MODEL_SAVE_FOLDER = "saved_models/"
 
@@ -923,7 +926,7 @@ if __name__ == '__main__':
     if MODE == 'e':
         print("Script execution started in EXPERIMENT mode.")
         # --- Your existing code for running parallel experiments ---
-        models_to_test = [LeveragingBaggingModel] # etc.
+        models_to_test = [MySuperEnhancedModel] # etc.
         projects_to_process = [f[:-4] for f in os.listdir(DATA_FOLDER) if f.endswith(".csv")]
         if projects_to_process:
             experiment_tasks = [(m, p) for m in models_to_test for p in projects_to_process]
@@ -947,8 +950,8 @@ if __name__ == '__main__':
         print("Script execution started in DEPLOYMENT SIMULATION mode.")
         
         # --- Configuration for the deployment simulation ---
-        PROJECT_FOR_TRAINING = "DATALAB" 
-        DEPLOYMENT_TEST_FILE = "DEPLOYMENT_TEST.csv"
+        PROJECT_FOR_TRAINING = "AMBARI" 
+        DEPLOYMENT_TEST_FILE = "My Scrum Project_test.csv"
         test_file_path = os.path.join(DATA_FOLDER, DEPLOYMENT_TEST_FILE)
         
         # Run the interactive simulation

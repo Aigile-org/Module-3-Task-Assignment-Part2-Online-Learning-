@@ -1,0 +1,61 @@
+[
+  {
+    "_id": "10066",
+    "assignee": "Mohammad Alomar",
+    "components": [],
+    "created": "2025-06-18 19:34:35",
+    "description": "pip install \"numpy<2.0\"",
+    "issuetype": {
+      "self": "https://mdr21.atlassian.net/rest/api/3/issuetype/10003",
+      "id": "10003",
+      "description": "Tasks track small, distinct pieces of work.",
+      "iconUrl": "https://mdr21.atlassian.net/rest/api/2/universal_avatar/view/type/issuetype/avatar/10318?size=medium",
+      "name": "Task",
+      "subtask": false,
+      "avatarId": 10318,
+      "entityId": "6feae150-d427-4f6c-953a-a96c1224f540",
+      "hierarchyLevel": 0
+    },
+    "labels": [
+      "PULL-req",
+      "PUSH-req"
+    ],
+    "priority": {
+      "self": "https://mdr21.atlassian.net/rest/api/3/priority/3",
+      "iconUrl": "https://mdr21.atlassian.net/images/icons/priorities/medium_new.svg",
+      "name": "Medium",
+      "id": "3"
+    },
+    "projectname": "My Scrum Project",
+    "summary": "testing add another issue"
+  },
+  {
+    "_id": "10034",
+    "assignee": "Mohammad Alomar",
+    "components": [],
+    "created": "2025-06-18 16:26:22",
+    "description": "After successfully installing a cluster, I saved YARN configs (changed only 1 property). YARN service would not start with ResourceManager saying it cannot bind to port.\\n\\nTurns out that certain properties in {{yarn-site.xml}} were set to null value.\\n{noformat}\\n\\\"yarn.resourcemanager.admin.address\\\" : \\\"null\\\",\\n\\\"yarn.resourcemanager.resource-tracker.address\\\" : \\\"null\\\",\\n\\\"yarn.resourcemanager.scheduler.address\\\" : \\\"null\\\",\\n\\\"yarn.resourcemanager.address\\\" : \\\"null\\\",\\n\\\"yarn.log.server.url\\\" : \\\"null\\\",\\n{noformat}\\nSimilar problem with MR2 also. The {{mapred-site.xml}} had 19 properties which were null.\\n\\n{noformat}\\n\\\"mapred.jobtracker.taskScheduler\\\" : \\\"null\\\",\\n\\\"mapred.tasktracker.map.tasks.maximum\\\" : \\\"null\\\",\\n\\\"mapred.hosts.exclude\\\" : \\\"null\\\",\\n....\\n{noformat}",
+    "issuetype": {
+      "self": "https://mdr21.atlassian.net/rest/api/3/issuetype/10003",
+      "id": "10003",
+      "description": "Tasks track small, distinct pieces of work.",
+      "iconUrl": "https://mdr21.atlassian.net/rest/api/2/universal_avatar/view/type/issuetype/avatar/10318?size=medium",
+      "name": "Task",
+      "subtask": false,
+      "avatarId": 10318,
+      "entityId": "6feae150-d427-4f6c-953a-a96c1224f540",
+      "hierarchyLevel": 0
+    },
+    "labels": [
+      "PULL-req"
+    ],
+    "priority": {
+      "self": "https://mdr21.atlassian.net/rest/api/3/priority/3",
+      "iconUrl": "https://mdr21.atlassian.net/images/icons/priorities/medium_new.svg",
+      "name": "Medium",
+      "id": "3"
+    },
+    "projectname": "My Scrum Project",
+    "summary": "Implement user authentication endpoint"
+  }
+]

@@ -2,19 +2,21 @@
 import os          # To interact with the operating system (finding files)
 import json        # To read and parse JSON files
 import pandas as pd  # The best library for handling data in tables (DataFrames)
-
+from parametars import TEST
 # --- Configuration ---
 # Set the path to the folder containing your .json files.
 # Make sure this path is correct for your system!
 # For example: "C:/Users/YourUser/Desktop/project/data"
-DATA_FOLDER = "data/" 
-
+if not TEST:
+    DATA_FOLDER = "data/" 
+else:
+    DATA_FOLDER = "deploy and test\jsons"
 
 # Step 2: Find all .json files in the data folder
 print(f"Searching for .json files in: {DATA_FOLDER}")
 try:
     # Use a list comprehension to find all files ending with .json
-    json_files = [f for f in os.listdir(DATA_FOLDER) if f.endswith(".json")]
+    json_files = [f for f in os.listdir(DATA_FOLDER) if f.endswith(".json") and "name_mapping" not in f]
 except FileNotFoundError:
     print(f"Error: The directory '{DATA_FOLDER}' was not found.")
     print("Please make sure the DATA_FOLDER variable is set correctly.")
@@ -91,8 +93,10 @@ for project_file_name in json_files:
     # 3. Determine the output CSV filename
     # We get the project name from the first issue we processed
     project_name = df["project_name"][0]
-    output_filename = os.path.join(DATA_FOLDER, f"{project_name}.csv")
-
+    if not TEST:
+        output_filename = os.path.join(DATA_FOLDER, f"{project_name}.csv")
+    else:
+        output_filename = os.path.join("deploy and test\csvs", f"{project_name}_test.csv")
     # 4. Save the final DataFrame to a CSV file
     df.to_csv(output_filename, index=False)
     print(f"Successfully processed {len(df)} issues.")

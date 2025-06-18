@@ -1,0 +1,2 @@
+TRAIN = True
+TEST = True

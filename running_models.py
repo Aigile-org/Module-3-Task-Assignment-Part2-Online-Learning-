@@ -901,6 +901,7 @@ def run_deployment_simulation(training_project: str, test_file_path: str, use_pr
         current_accuracy = model.running_accuracy.get()
         print(f"\n  Feedback received. Model has learned from assigning the issue to '{true_label}'.")
         print(f"  Updated model accuracy: {current_accuracy:.2%}")
+        save_model(model,training_project)
 
     print("\n" + "="*80)
     print(" " * 22 + "DEPLOYMENT SIMULATION FINISHED")
@@ -953,7 +954,7 @@ if __name__ == '__main__':
 
     if MODE == 'experiment':
         print("Script execution started in EXPERIMENT mode.")
-        models_to_test = [MyNaiveBayesModel, MyNaiveBayesWithADWIN, HoeffdingAdaptiveTreeModel, LeveragingBaggingModel, PassiveAggressiveModel, MySuperEnhancedModel]
+        models_to_test = [MySuperEnhancedModel]
         # Dynamically find all project CSVs in the data folder
         try:
             projects_to_process = [f[:-4] for f in os.listdir(DATA_FOLDER) if f.endswith(".csv") and "name_mapping" not in f]

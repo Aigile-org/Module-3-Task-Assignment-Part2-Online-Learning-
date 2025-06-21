@@ -296,13 +296,8 @@ class MySuperEnhancedModel(MyOnlineModel):
             logger.error(f"Learning error in MySuperEnhancedModel: {str(e)}")
             return {
                 "success": False,
-                "error": str(e),
-                "assignee": assignee
+                "error": str(e),                "assignee": assignee
             }
-
-# Global model instance for caching
-model_instance = None
-model_last_modified = None
 
 def download_from_s3(bucket, key, local_path):
     """
@@ -330,7 +325,6 @@ def download_from_s3(bucket, key, local_path):
 
 def load_model_from_s3():
     """Load the River model from S3 bucket using local file download."""
-    global model_instance, model_last_modified
     
     bucket_name = "aigile-bucket"
     model_key = "My_Super_Enhanced_Model_AMBARI.pkl"
@@ -339,22 +333,14 @@ def load_model_from_s3():
     try:
         logger.info(f"Loading model from S3: {bucket_name}/{model_key}")
         
-        # Check if we need to reload the model
-        try:
-            response = s3_client.head_object(Bucket=bucket_name, Key=model_key)
-            current_modified = response['LastModified']
-            
-            if model_instance and model_last_modified == current_modified:
-                logger.info("Using cached model instance")
-                return model_instance
-        except Exception as e:
-            logger.warning(f"Could not check model timestamp: {e}")
+        # Always download fresh model (no caching)
+        logger.info("Loading fresh model instance (caching disabled)")
         
         # Download model file to local path
         download_success = download_from_s3(bucket_name, model_key, local_model_path)
         
         if not download_success:
-            raise Exception("Failed to download model file from S3")        # Load the model from local file
+            raise Exception("Failed to download model file from S3")# Load the model from local file
         logger.info(f"Loading model from local file: {local_model_path}")
         
         # CRITICAL FIX: Register our classes in __main__ module so pickle can find them
@@ -409,20 +395,12 @@ def load_model_from_s3():
             # Try to add the method if it's a MySuperEnhancedModel but missing the method
             if isinstance(model_instance, MySuperEnhancedModel):
                 logger.warning("Model is MySuperEnhancedModel but missing predict_assignment method")
-        
-        # Clean up the temporary file
+          # Clean up the temporary file
         try:
             os.remove(local_model_path)
             logger.info("Cleaned up temporary model file")
         except Exception as e:
             logger.warning(f"Could not clean up temporary file: {e}")
-        
-        # Update cache timestamp
-        try:
-            response = s3_client.head_object(Bucket=bucket_name, Key=model_key)
-            model_last_modified = response['LastModified']
-        except Exception as e:
-            logger.warning(f"Could not update cache timestamp: {e}")
         
         logger.info(f"✅ Model loaded successfully from local file! Type: {type(model_instance).__name__}")
         return model_instance
@@ -468,14 +446,7 @@ def save_model_to_s3(model):
             logger.info("Cleaned up temporary save file")
         except Exception as e:
             logger.warning(f"Could not clean up temporary save file: {e}")
-        
-        # Update cache timestamp
-        try:
-            response = s3_client.head_object(Bucket=bucket_name, Key=model_key)
-            model_last_modified = response['LastModified']
-        except Exception as e:
-            logger.warning(f"Could not update cache timestamp after save: {e}")
-        
+                
         logger.info("✅ Model saved successfully to S3 using local file approach")
         return True
         
@@ -623,25 +594,33 @@ def lambda_handler(event, context):
             try:
                 # Load model from S3
                 model = load_model_from_s3()
-                
-                # Use the model's partial_fit method
+                  # Use the model's partial_fit method
                 if hasattr(model, 'partial_fit'):
                     result = model.partial_fit(issue_data, assignee)
                     logger.info(f"Model partial_fit successful: {result}")
                     
-                    # Save updated model back to S3
-                    save_success = save_model_to_s3(model)
+                    # Return success immediately, save model asynchronously
+                    response_body = {
+                        'success': True,
+                        'message': f'Model updated with assignment: {assignee}',
+                        'learning_result': result,
+                        'learning_method': 'river_partial_fit'
+                    }
+                    
+                    # Try to save model, but don't let it block the response
+                    try:
+                        save_success = save_model_to_s3(model)
+                        response_body['model_saved'] = save_success
+                        logger.info(f"Model saved to S3 successfully: {save_success}")
+                    except Exception as save_error:
+                        logger.warning(f"Model save failed, but partial_fit was successful: {save_error}")
+                        response_body['model_saved'] = False
+                        response_body['save_warning'] = str(save_error)
                     
                     return {
                         'statusCode': 200,
                         'headers': headers,
-                        'body': json.dumps({
-                            'success': True,
-                            'message': f'Model updated with assignment: {assignee}',
-                            'learning_result': result,
-                            'model_saved': save_success,
-                            'learning_method': 'river_partial_fit'
-                        })
+                        'body': json.dumps(response_body)
                     }
                 else:
                     logger.warning("Model doesn't have partial_fit method")

@@ -11,7 +11,7 @@ import multiprocessing as mp
 import random
 import pickle 
 # River is the core online machine learning library
-from river import feature_extraction, compose, naive_bayes, multiclass, ensemble, drift, metrics,  linear_model ,tree
+from river import feature_extraction, compose, naive_bayes, multiclass, ensemble, drift, metrics,  linear_model ,tree, optim
 from parametars import TEST
 # TEST = True
 if not TEST:
@@ -76,15 +76,10 @@ class MyOnlineModel:
     2. Tracking progressive accuracy.
     3. Detecting concept drift with ADWIN.
     """
-    def __init__(self, variables_to_use="all", drift_delta=None):
+    def __init__(self, drift_delta=None):
         
         # --- Part A: Define which features to use ---
-        if variables_to_use == "all":
-            # If "all" is specified, we use our standard set of features.
-            feature_names = ["summary", "description", "labels", "components_name", "priority_name", "issue_type_name"]
-        else:
-            # Otherwise, we use the specific list of features provided.
-            feature_names = variables_to_use
+        feature_names = ["summary", "description", "labels", "components_name", "priority_name", "issue_type_name"]
 
         # --- Part B: Set up the Drift Detector ---
         # The drift detector is optional. We only create it if a 'delta' value is given.
@@ -141,7 +136,6 @@ class MyOnlineModel:
         self.ml_model.learn_one(feature_vector, true_label)
         
         return predicted_label
-    #TODO:: Know How Its calculated ( Progressive Accuracy ) 
     def _update_accuracy(self, true_label, predicted_label):
         """Updates the rolling accuracy and stores its current value."""
         # Update the river metric object with the latest result
@@ -159,7 +153,7 @@ class MyOnlineModel:
     #         # The detector's internal state will tell us if a change was detected.
     #         if self.drift_detector.drift_detected:
     #             self.detected_drifts_at.append(issue_index)
-    #TODO:: Understand This
+
     def _check_for_drift(self, issue_index):
         if self.drift_detector is not None:
             # A more robust way to use ADWIN is to feed it a stream of 0s (error) and 1s (correct)
@@ -198,12 +192,12 @@ class MyNaiveBayesModel(MyOnlineModel):
     A simple online classifier using the Multinomial Naive Bayes algorithm.
     It relies entirely on the parent MyOnlineModel for its functionality.
     """
-    def __init__(self, alpha=0.1, variables_to_use="all"):
+    def __init__(self, alpha=0.1):
         # --- Step A: Initialize the parent class ---
         # `super()` refers to the parent class (MyOnlineModel).
         # We call its __init__ method to set up the feature pipeline,
         # the accuracy trackers, and everything else.
-        super().__init__(variables_to_use=variables_to_use)
+        super().__init__()
         
         # --- Step B: Define the specific ML model for this class ---
         # We now assign a specific algorithm to the `self.ml_model` placeholder
@@ -217,11 +211,11 @@ class MyNaiveBayesWithADWIN(MyOnlineModel):
     """
     An online Naive Bayes classifier that resets itself when concept drift is detected.
     """
-    def __init__(self, alpha=0.1, delta=0.15, variables_to_use="all"):
+    def __init__(self, alpha=0.1, delta=0.15):
         # --- Step A: Initialize the parent class, but this time passing the delta ---
         # Because we provide a 'drift_delta', the parent's __init__ method
         # will now create an instance of the ADWIN detector.
-        super().__init__(variables_to_use=variables_to_use, drift_delta=delta)
+        super().__init__(drift_delta=delta)
         
         # --- Step B: Define the specific ML model (same as before) ---
         self.ml_model = naive_bayes.MultinomialNB(alpha=alpha)
@@ -250,6 +244,121 @@ class MyNaiveBayesWithADWIN(MyOnlineModel):
         return prediction
 
 
+### ========================================================== ###
+###           MODEL A: HOEFFDING ADAPTIVE TREE                 ###
+### ========================================================== ###
+
+class HoeffdingAdaptiveTreeModel(MyOnlineModel):
+    """
+    An online classifier using a Hoeffding Adaptive Tree (HAT).
+    This model is designed for streaming data and has its own internal drift detection,
+    making the parent's drift detector redundant.
+    """
+    def __init__(self, grace_period=150, delta_split=1e-5, delta_drift=0.01, **kwargs):
+        # We don't pass drift_delta to the parent because this model handles drift internally.
+        super().__init__(drift_delta=None, **kwargs) 
+        
+        self.name = "Hoeffding_Adaptive_Tree"
+        self.ml_model = tree.HoeffdingAdaptiveTreeClassifier(
+            grace_period=grace_period,
+            delta=delta_split,
+            drift_detector=drift.ADWIN(delta=delta_drift), # Internal drift detector
+            seed=42
+        )
+
+    def _predict_and_learn(self, feature_vector, true_label):
+        # This model provides probabilities, which is more robust
+        probabilities = self.ml_model.predict_proba_one(feature_vector)
+        predicted_label = max(probabilities, key=probabilities.get) if probabilities else None
+        self.ml_model.learn_one(feature_vector, true_label)
+        return predicted_label
+
+    def process_one_issue(self, issue_index, issue_features, issue_label):
+        """
+        Simplified orchestration: We don't need the parent's drift check.
+        """
+        feature_vector = self._transform_features(issue_features)
+        prediction = self._predict_and_learn(feature_vector, issue_label)
+        self._update_accuracy(issue_label, prediction)
+        # Note: No call to _check_for_drift()
+        return prediction
+
+### ========================================================== ###
+###           MODEL B: LEVERAGING BAGGING CLASSIFIER           ###
+### ========================================================== ###
+
+class LeveragingBaggingModel(MyOnlineModel):
+    """
+    An online classifier using the Leveraging Bagging ensemble method.
+    This is like an online Random Forest and handles drift internally.
+    """
+    def __init__(self, n_models=10, **kwargs):
+        super().__init__(drift_delta=None, **kwargs)
+        
+        self.name = "Leveraging_Bagging"
+        self.ml_model = ensemble.LeveragingBaggingClassifier(
+            model=tree.HoeffdingTreeClassifier(grace_period=100), # Base learners
+            n_models=n_models,
+            seed=42
+        )
+
+    def _predict_and_learn(self, feature_vector, true_label):
+        probabilities = self.ml_model.predict_proba_one(feature_vector)
+        predicted_label = max(probabilities, key=probabilities.get) if probabilities else None
+        self.ml_model.learn_one(feature_vector, true_label)
+        return predicted_label
+
+    def process_one_issue(self, issue_index, issue_features, issue_label):
+        """
+        Simplified orchestration: No need for the parent's drift check.
+        """
+        feature_vector = self._transform_features(issue_features)
+        prediction = self._predict_and_learn(feature_vector, issue_label)
+        self._update_accuracy(issue_label, prediction)
+        return prediction
+
+### ========================================================== ###
+###           MODEL C: PASSIVE-AGGRESSIVE CLASSIFIER           ###
+### ========================================================== ###
+
+class PassiveAggressiveModel(MyOnlineModel):
+    """
+    An online classifier using a simple but effective Passive-Aggressive algorithm.
+    It relies on the parent class for drift detection.
+    """
+    def __init__(self, drift_delta=0.05, **kwargs):
+        # We DO pass drift_delta to the parent because this model needs it.
+        super().__init__(drift_delta=drift_delta, **kwargs)
+        
+        self.name = "Passive_Aggressive"
+        # PassiveAggressiveClassifier is a linear model, wrapped in OneVsRest
+        # to handle the multi-class assignment problem.
+        self.ml_model = multiclass.OneVsRestClassifier(
+            classifier=linear_model.PassiveAggressiveClassifier(C=0.01, mode=1)
+        )
+        # Note: We don't need to override process_one_issue. The parent's default works perfectly.
+
+
+### ========================================================== ###
+###           MODEL : Softmax Regression CLASSIFIER           ###
+### ========================================================== ###
+class SoftmaxModel(MyOnlineModel):
+    def __init__(self, drift_delta=0.05, **kwargs):
+        # We DO pass drift_delta to the parent because this model needs it.
+        super().__init__(drift_delta=drift_delta, **kwargs)
+        
+        self.name = "Softmax"
+        # PassiveAggressiveClassifier is a linear model, wrapped in OneVsRest
+        # to handle the multi-class assignment problem.
+        self.ml_model = multiclass.OneVsRestClassifier(
+            classifier=linear_model.SoftmaxRegression(
+                optimizer=optim.Adam(0.01),
+                # loss=lo.Hinge()
+            )
+        )
+        # Note: We don't need to override process_one_issue. The parent's default works perfectly.
+
+
 # This class inherits all the base functionality from MyOnlineModel
 #Adaboost 10 --> 5 
 class MyEnhancedModel(MyOnlineModel):
@@ -260,10 +369,10 @@ class MyEnhancedModel(MyOnlineModel):
     1. A custom prediction method that weights recently active developers more heavily.
     2. A smart drift-handling mechanism that only resets the worst-performing base models.
     """
-    def __init__(self, alpha=0.05, delta=0.05, n_models=10, variables_to_use="all"):
+    def __init__(self, alpha=0.05, delta=0.05, n_models=10):
         # --- Step A: Initialize the parent class ---
         # We pass the drift_delta to the parent to ensure the ADWIN detector is created.
-        super().__init__(variables_to_use=variables_to_use, drift_delta=delta)
+        super().__init__(drift_delta=delta)
         
         # --- Step B: Define the specific ML model for this class ---
         # This is a two-part process for AdaBoost.
@@ -379,104 +488,6 @@ class MyEnhancedModel(MyOnlineModel):
                     
         return prediction
      
-### ========================================================== ###
-###           MODEL A: HOEFFDING ADAPTIVE TREE                 ###
-### ========================================================== ###
-
-class HoeffdingAdaptiveTreeModel(MyOnlineModel):
-    """
-    An online classifier using a Hoeffding Adaptive Tree (HAT).
-    This model is designed for streaming data and has its own internal drift detection,
-    making the parent's drift detector redundant.
-    """
-    def __init__(self, grace_period=150, delta_split=1e-5, delta_drift=0.01, **kwargs):
-        # We don't pass drift_delta to the parent because this model handles drift internally.
-        super().__init__(drift_delta=None, **kwargs) 
-        
-        self.name = "Hoeffding_Adaptive_Tree"
-        self.ml_model = tree.HoeffdingAdaptiveTreeClassifier(
-            grace_period=grace_period,
-            delta=delta_split,
-            drift_detector=drift.ADWIN(delta=delta_drift), # Internal drift detector
-            seed=42
-        )
-
-    def _predict_and_learn(self, feature_vector, true_label):
-        # This model provides probabilities, which is more robust
-        probabilities = self.ml_model.predict_proba_one(feature_vector)
-        predicted_label = max(probabilities, key=probabilities.get) if probabilities else None
-        self.ml_model.learn_one(feature_vector, true_label)
-        return predicted_label
-
-    def process_one_issue(self, issue_index, issue_features, issue_label):
-        """
-        Simplified orchestration: We don't need the parent's drift check.
-        """
-        feature_vector = self._transform_features(issue_features)
-        prediction = self._predict_and_learn(feature_vector, issue_label)
-        self._update_accuracy(issue_label, prediction)
-        # Note: No call to _check_for_drift()
-        return prediction
-
-### ========================================================== ###
-###           MODEL B: LEVERAGING BAGGING CLASSIFIER           ###
-### ========================================================== ###
-
-class LeveragingBaggingModel(MyOnlineModel):
-    """
-    An online classifier using the Leveraging Bagging ensemble method.
-    This is like an online Random Forest and handles drift internally.
-    """
-    def __init__(self, n_models=10, **kwargs):
-        super().__init__(drift_delta=None, **kwargs)
-        
-        self.name = "Leveraging_Bagging"
-        self.ml_model = ensemble.LeveragingBaggingClassifier(
-            model=tree.HoeffdingTreeClassifier(grace_period=100), # Base learners
-            n_models=n_models,
-            seed=42
-        )
-
-    def _predict_and_learn(self, feature_vector, true_label):
-        probabilities = self.ml_model.predict_proba_one(feature_vector)
-        predicted_label = max(probabilities, key=probabilities.get) if probabilities else None
-        self.ml_model.learn_one(feature_vector, true_label)
-        return predicted_label
-
-    def process_one_issue(self, issue_index, issue_features, issue_label):
-        """
-        Simplified orchestration: No need for the parent's drift check.
-        """
-        feature_vector = self._transform_features(issue_features)
-        prediction = self._predict_and_learn(feature_vector, issue_label)
-        self._update_accuracy(issue_label, prediction)
-        return prediction
-
-### ========================================================== ###
-###           MODEL C: PASSIVE-AGGRESSIVE CLASSIFIER           ###
-### ========================================================== ###
-
-class PassiveAggressiveModel(MyOnlineModel):
-    """
-    An online classifier using a simple but effective Passive-Aggressive algorithm.
-    It relies on the parent class for drift detection.
-    """
-    def __init__(self, drift_delta=0.05, **kwargs):
-        # We DO pass drift_delta to the parent because this model needs it.
-        super().__init__(drift_delta=drift_delta, **kwargs)
-        
-        self.name = "Passive_Aggressive"
-        # PassiveAggressiveClassifier is a linear model, wrapped in OneVsRest
-        # to handle the multi-class assignment problem.
-        self.ml_model = multiclass.OneVsRestClassifier(
-            classifier=linear_model.PassiveAggressiveClassifier(C=0.01, mode=1)
-        )
-        # Note: We don't need to override process_one_issue. The parent's default works perfectly.
-
-
-### ========================================================== ###
-###    YOUR ENHANCED MODEL WITH PROBABILISTIC RESET (SUPER)    ###
-### ========================================================== ###
 
 ### ========================================================== ###
 ###    UPDATED MySuperEnhancedModel WITH DEPLOYMENT METHODS    ###
@@ -661,10 +672,6 @@ class MySuperEnhancedModel(MyOnlineModel):
 # This section contains the function that runs an experiment for one model
 # on one project.
 # ==============================================================================
-
-
-# (Assuming pandas, os, json, and your custom functions are imported)
-
 def run_single_experiment(model_class, project_name):
     """
     Executes a full online learning simulation for one model on one project.

@@ -9,6 +9,20 @@ import queue
 import pickle
 import pandas as pd
 
+
+import os
+import json
+import pandas as pd
+from collections import defaultdict
+from itertools import repeat
+import multiprocessing as mp
+import random
+import pickle 
+# River is the core online machine learning library
+from river import feature_extraction, compose, naive_bayes, multiclass, ensemble, drift, metrics,  linear_model ,tree
+from parametars import TEST
+
+
 # AWS S3 imports
 import boto3
 from botocore.exceptions import ClientError, NoCredentialsError
@@ -16,7 +30,337 @@ from botocore.exceptions import ClientError, NoCredentialsError
 # ==============================================================================
 #  1. CORE JIRA LOGIC (Two separate functions for Train and Test modes)
 # ==============================================================================
+####################################
+class MyOnlineModel:
+    """
+    A blueprint for an o
+    nline machine learning model for issue assignment.
+    
+    This class provides the core framework for:
+    1. Feature extraction using TF-IDF.
+    2. Tracking progressive accuracy.
+    3. Detecting concept drift with ADWIN.
+    """
+    def __init__(self, variables_to_use="all", drift_delta=None):
+        
+        # --- Part A: Define which features to use ---
+        if variables_to_use == "all":
+            # If "all" is specified, we use our standard set of features.
+            feature_names = ["summary", "description", "labels", "components_name", "priority_name", "issue_type_name"]
+        else:
+            # Otherwise, we use the specific list of features provided.
+            feature_names = variables_to_use
 
+        # --- Part B: Set up the Drift Detector ---
+        # The drift detector is optional. We only create it if a 'delta' value is given.
+        if drift_delta is not None:
+            self.drift_detector = drift.ADWIN(delta=drift_delta)
+        else:
+            self.drift_detector = None
+        
+        # --- Part C: Create the Feature Engineering Pipeline ---
+        # This is the core of our feature preparation.
+        # We create a list where each item is a TF-IDF transformer for one feature.
+        # The `on=name` tells each transformer which key to look for in the input dictionary.
+        list_of_transformers = []
+        for name in feature_names:
+            list_of_transformers.append(feature_extraction.TFIDF(on=name))
+
+        # `TransformerUnion` combines the outputs of all individual transformers
+        # into a single, large feature vector. The '*' unpacks our list into arguments.
+        self.feature_pipeline = compose.TransformerUnion(*list_of_transformers)
+
+        # --- Part D: Initialize containers for results ---
+        self.accuracies_over_time = []  # To store accuracy at each step
+        self.detected_drifts_at = []    # To store the index 'i' where drift occurs
+        self.running_accuracy = metrics.Accuracy() # The river object to calculate rolling accuracy
+        
+        # This is a placeholder. The actual ML algorithm (e.g., Naive Bayes)
+        # will be defined in the child classes that inherit from this one.
+        self.ml_model = None 
+
+    def _transform_features(self, single_issue_dict):
+        """
+        Processes a single issue's features using the TF-IDF pipeline.
+        
+        This method does two things:
+        1. Updates the pipeline's internal state (e.g., vocabulary) with `learn_one`.
+        2. Converts the raw feature dictionary into a numerical vector with `transform_one`.
+        """
+        # First, let the pipeline learn from the raw data.
+        self.feature_pipeline.learn_one(single_issue_dict)
+        
+        # Then, get the transformed numerical vector.
+        transformed_vector = self.feature_pipeline.transform_one(single_issue_dict)
+        
+        return transformed_vector
+
+    def _predict_and_learn(self, feature_vector, true_label):
+        """
+        Performs the 'test-then-train' cycle on the machine learning model.
+        """
+        # 1. PREDICT (Test): Make a prediction using the current state of the model.
+        predicted_label = self.ml_model.predict_one(feature_vector)
+        
+        # 2. LEARN (Train): Update the model with the correct answer.
+        self.ml_model.learn_one(feature_vector, true_label)
+        
+        return predicted_label
+    #TODO:: Know How Its calculated ( Progressive Accuracy ) 
+    def _update_accuracy(self, true_label, predicted_label):
+        """Updates the rolling accuracy and stores its current value."""
+        # Update the river metric object with the latest result
+        self.running_accuracy.update(true_label, predicted_label)
+        
+        # Append the new overall accuracy to our list for later plotting
+        self.accuracies_over_time.append(self.running_accuracy.get())
+        
+    # def _check_for_drift(self, issue_index):
+    #     """Updates the drift detector and stores the index if drift is found."""
+    #     # This check is only performed if a drift detector was created.
+    #     if self.drift_detector is not None:
+    #         # Give the detector the latest accuracy score to analyze.
+    #         self.drift_detector.update(self.running_accuracy.get())
+    #         # The detector's internal state will tell us if a change was detected.
+    #         if self.drift_detector.drift_detected:
+    #             self.detected_drifts_at.append(issue_index)
+    #TODO:: Understand This
+    def _check_for_drift(self, issue_index):
+        if self.drift_detector is not None:
+            # A more robust way to use ADWIN is to feed it a stream of 0s (error) and 1s (correct)
+            is_correct = 1 if self.running_accuracy.get() > (self.accuracies_over_time[-2] if len(self.accuracies_over_time) > 1 else 0) else 0
+            self.drift_detector.update(is_correct)
+            if self.drift_detector.drift_detected:
+                self.detected_drifts_at.append(issue_index)
+
+    def process_one_issue(self, issue_index, issue_features, issue_label):
+        """
+        The main public method to process a single issue through the entire pipeline.
+        """
+        # Step 1: Convert raw features into a numerical vector.
+        feature_vector = self._transform_features(issue_features)
+        
+        # Step 2: Get a prediction and train the model.
+        prediction = self._predict_and_learn(feature_vector, issue_label)
+        
+        # Step 3: Update our performance metrics.
+        self._update_accuracy(issue_label, prediction)
+        self._check_for_drift(issue_index)
+        
+        return prediction
+
+    def get_results(self):
+        """Returns the final results of the simulation run."""
+        return {
+            "accuracies": self.accuracies_over_time, 
+            "drifts": self.detected_drifts_at
+        }
+
+
+def my_preprocess_data(raw_data):
+    """
+    Prepares raw issue data for online machine learning with River.
+    
+    This function will:
+    1. Sort the issues chronologically.
+    2. Clean text fields.
+    3. Separate features (X) and target (Y).
+    4. Format X into a list of dictionaries.
+    """    
+    # Create a copy to avoid changing the original DataFrame
+    data = raw_data.copy()
+    
+    # --- Step 1 & 2: Convert date strings to sortable integers ---
+    data['created_date'] = pd.to_datetime(data['created_date'])
+    data['sortable_date'] = data['created_date'].apply(lambda date_obj: date_obj.toordinal())
+    
+    # --- Step 3: Sort the entire dataset by date, oldest to newest ---
+    data = data.sort_values(by='sortable_date', ascending=True)
+    data = data.reset_index(drop=True)
+    
+    # --- Step 4: Clean data and separate features from the target ---
+    feature_columns = ['summary', 'description', 'labels', 'components_name', 'priority_name', 'issue_type_name']
+    
+    for col in feature_columns:
+        if col in data.columns:
+            data[col] = data[col].fillna('')
+    y_target = data['assignee']
+    x_features_df = data[feature_columns]
+    
+    # --- Step 5: Convert the features DataFrame into a list of dictionaries for River ---
+    x_features_stream = x_features_df.to_dict('records')
+
+    return x_features_stream, y_target
+
+
+class MySuperEnhancedModel(MyOnlineModel):
+    """
+    A "super" enhanced version of the original AdaBoost model.
+    It now includes methods for a real-world deployment scenario where
+    prediction and learning are separate steps.
+    """
+    def __init__(self, alpha=0.1, delta=0.15, n_models=10, name_mapping=None,**kwargs):
+        # This super().__init__() call correctly initializes the pipeline
+        # from MyOnlineModel, which looks for 'summary', 'description', etc.
+        super().__init__(drift_delta=delta, **kwargs)
+        self.name_mapping = name_mapping or []
+
+        
+        self.name = "My_Super_Enhanced_Model"
+        
+        base_learner = multiclass.OneVsRestClassifier(naive_bayes.MultinomialNB(alpha=alpha))
+        self.ml_model = ensemble.AdaBoostClassifier(model=base_learner, n_models=n_models, seed=42)
+        
+        self.n_models = n_models
+        self.base_model_accuracies = [metrics.Accuracy() for _ in range(self.n_models)]
+        self.recency_window = 100
+        self.last_assignees = []
+        
+    # --- Existing methods for simulation ---
+    # _predict_and_learn and process_one_issue remain unchanged
+    # so your existing experiment runner still works.
+    def _predict_and_learn(self, feature_vector, true_label):
+        # (This method is used by the simulation runner)
+        self.last_assignees.append(true_label)
+        if len(self.last_assignees) > self.recency_window: self.last_assignees.pop(0)
+        recency_weights = defaultdict(float)
+        decay_factor = 0.98; current_weight = 1.0
+        for dev in reversed(self.last_assignees):
+            if dev not in recency_weights:
+                recency_weights[dev] = current_weight
+                current_weight *= decay_factor
+
+        probabilities = self.ml_model.predict_proba_one(feature_vector)
+        predicted_label = None
+        if probabilities:
+            weighted_probabilities = {dev: proba * recency_weights.get(dev, 0.0) for dev, proba in probabilities.items()}
+            if any(weighted_probabilities.values()):
+                predicted_label = max(weighted_probabilities, key=weighted_probabilities.get)
+            else:
+                predicted_label = max(probabilities, key=probabilities.get)
+        self.ml_model.learn_one(feature_vector, true_label)
+        return predicted_label
+
+    def process_one_issue(self, issue_index, issue_features, issue_label):
+        # (This method is used by the simulation runner)
+        feature_vector = self._transform_features(issue_features)
+        prediction = self._predict_and_learn(feature_vector, issue_label)
+        self._update_accuracy(issue_label, prediction)
+        for i, model in enumerate(self.ml_model.models):
+            if (base_pred := model.predict_one(feature_vector)) is not None:
+                self.base_model_accuracies[i].update(issue_label, base_pred)
+        if self.drift_detector is not None:
+            is_correct = 1 if prediction == issue_label else 0
+            self.drift_detector.update(is_correct)
+            if self.drift_detector.drift_detected:
+                self.detected_drifts_at.append(issue_index)
+                for i in range(self.n_models):
+                    accuracy = self.base_model_accuracies[i].get()
+                    if random.random() < (1.0 - accuracy):
+                        self.ml_model.models[i] = self.ml_model.model.clone()
+                        self.ml_model.correct_weight[i], self.ml_model.wrong_weight[i] = 0.0, 0.0
+                        self.base_model_accuracies[i] = metrics.Accuracy()
+        return prediction
+
+    # --- NEW METHODS FOR DEPLOYMENT SIMULATION ---
+
+    def predict_recommendations(self, issue_features: dict, top_n=3):
+        """
+        Step 1 of Deployment: Predicts assignees for a new issue with an unknown label.
+        
+        Returns:
+            - A list of top_n recommended assignees (with actual names if mapping exists)
+            - The generated feature_vector (to be used later in the learning step)
+        """
+        # First, transform the raw features
+        feature_vector = self._transform_features(issue_features)
+        
+        # Get probabilities from the core model
+        probabilities = self.ml_model.predict_proba_one(feature_vector)
+        
+        if not probabilities:
+            return [], feature_vector
+
+        # Apply recency weights
+        recency_weights = defaultdict(float)
+        decay_factor = 0.95
+        current_weight = 1.0
+        for dev in reversed(self.last_assignees):
+            if dev not in recency_weights:
+                recency_weights[dev] = current_weight
+                current_weight *= decay_factor
+        
+        # Combine content-based and recency-based predictions
+        weighted_scores = {}
+        for dev, proba in probabilities.items():
+            # Balance between content prediction (0.7) and recency (0.3)
+            weighted_scores[dev] = (0.99 * proba) + (0.01 * recency_weights.get(dev, 0.0))
+        
+        # Sort by combined score
+        sorted_recommendations = sorted(weighted_scores.items(), 
+                                    key=lambda item: item[1], 
+                                    reverse=True)
+        
+        # Convert numerical labels to names if mapping exists
+        top_recommendations = []
+        for dev_num, score in sorted_recommendations[:top_n]:
+            # If we have a name mapping and the prediction is a number within range
+            if hasattr(self, 'name_mapping') and self.name_mapping and isinstance(dev_num, int) and 0 <= dev_num < len(self.name_mapping):
+                top_recommendations.append(self.name_mapping[dev_num])
+            else:
+                # Either no mapping or already a name (during training)
+                top_recommendations.append(str(dev_num))
+        
+        return top_recommendations, feature_vector
+
+    def learn_from_assignment(self, feature_vector: dict, true_label: str, issue_index: int):
+        """
+        Step 2 of Deployment: Learns from the assignment after the true label is known.
+        This method contains the logic for updating all internal model states.
+        """
+        # --- Part 1: Update the core model ---
+        self.ml_model.learn_one(feature_vector, true_label)
+        
+        # --- Part 2: Update recency heuristic list ---
+        self.last_assignees.append(true_label)
+        if len(self.last_assignees) > self.recency_window:
+            self.last_assignees.pop(0)
+
+        # --- Part 3: Update accuracy metrics ---
+        # Generate a prediction to update accuracy metrics
+        prediction = self._predict_for_accuracy(feature_vector)
+        if prediction is not None:
+            self._update_accuracy(true_label, prediction)
+        
+        # Update base model accuracies
+        for i, model in enumerate(self.ml_model.models):
+            if (base_pred := model.predict_one(feature_vector)) is not None:
+                self.base_model_accuracies[i].update(true_label, base_pred)
+
+        # Update and check the ADWIN drift detector
+        if self.drift_detector is not None:
+            is_correct = 1 if prediction == true_label else 0
+            self.drift_detector.update(is_correct)
+            
+            if self.drift_detector.drift_detected:
+                self.detected_drifts_at.append(issue_index)
+                print(f"  -> Drift detected! Applying probabilistic reset...")
+                for i in range(self.n_models):
+                    accuracy = self.base_model_accuracies[i].get()
+                    if random.random() < (1.0 - accuracy):
+                        self.ml_model.models[i] = self.ml_model.model.clone()
+                        self.ml_model.correct_weight[i], self.ml_model.wrong_weight[i] = 0.0, 0.0
+                        self.base_model_accuracies[i] = metrics.Accuracy()
+
+    def _predict_for_accuracy(self, feature_vector):
+        """Helper method to generate predictions for accuracy tracking"""
+        probabilities = self.ml_model.predict_proba_one(feature_vector)
+        if probabilities:
+            return max(probabilities, key=probabilities.get)
+        return None
+
+
+#####################################
 def get_text_from_description(description_obj):
     if not description_obj or 'content' not in description_obj:
         return ""
@@ -96,7 +440,7 @@ def fetch_train_and_upload(config, output_queue):
             transformed_issue = {
                 "_id": issue.get('id'), 
                 "key": issue.get('key'), 
-                "assignee": assignee_to_num.get(assignee_name) if assignee_name else None,  # Convert to numeric ID
+                "assignee": assignee_to_num.get(assignee_name) if assignee_name else None,
                 "components_name": components,  # Changed from "components"
                 "created_date": formatted_created_date,  # Changed from "created"
                 "description": get_text_from_description(fields.get('description')),
@@ -122,7 +466,7 @@ def fetch_train_and_upload(config, output_queue):
         output_queue.put("🤖 Training model...")
         try:
             # Import required classes from running_models
-            from running_models import MySuperEnhancedModel, my_preprocess_data
+            # from running_models import MySuperEnhancedModel, my_preprocess_data
             
             # Convert JSON data to DataFrame for processing
             df = pd.DataFrame(transformed_issues_list)

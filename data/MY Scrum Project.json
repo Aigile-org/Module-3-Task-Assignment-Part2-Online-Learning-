@@ -1,8 +1,21 @@
 [
   {
+    "_id": "10303",
+    "key": "SCRUM-7",
+    "assignee": 0,
+    "components_name": "",
+    "created_date": "2025-06-22 06:30:08",
+    "description": "",
+    "issue_type_name": "Task",
+    "labels": "",
+    "priority_name": "Medium",
+    "projectname": "My Scrum Project",
+    "summary": "FE: Build 'Friend Suggestions' component"
+  },
+  {
     "_id": "10067",
     "key": "SCRUM-5",
-    "assignee": 0,
+    "assignee": 1,
     "components_name": "",
     "created_date": "2025-06-18 22:06:43",
     "description": "DEPLOYMENT_TEST_FILE    \nDEPLOYMENT_TEST_FILE\nDEPLOYMENT_TEST_FILE\nDEPLOYMENT_TEST_FILE\nDEPLOYMENT_TEST_FILE",
@@ -15,7 +28,7 @@
   {
     "_id": "10066",
     "key": "SCRUM-4",
-    "assignee": 1,
+    "assignee": 0,
     "components_name": "",
     "created_date": "2025-06-18 19:34:35",
     "description": "pip install \"numpy<2.0\"",
@@ -28,7 +41,7 @@
   {
     "_id": "10034",
     "key": "SCRUM-3",
-    "assignee": 1,
+    "assignee": 0,
     "components_name": "",
     "created_date": "2025-06-18 16:26:22",
     "description": "After successfully installing a cluster, I saved YARN configs (changed only 1 property). YARN service would not start with ResourceManager saying it cannot bind to port.\\n\\nTurns out that certain properties in {{yarn-site.xml}} were set to null value.\\n{noformat}\\n\\\"yarn.resourcemanager.admin.address\\\" : \\\"null\\\",\\n\\\"yarn.resourcemanager.resource-tracker.address\\\" : \\\"null\\\",\\n\\\"yarn.resourcemanager.scheduler.address\\\" : \\\"null\\\",\\n\\\"yarn.resourcemanager.address\\\" : \\\"null\\\",\\n\\\"yarn.log.server.url\\\" : \\\"null\\\",\\n{noformat}\\nSimilar problem with MR2 also. The {{mapred-site.xml}} had 19 properties which were null.\\n\\n{noformat}\\n\\\"mapred.jobtracker.taskScheduler\\\" : \\\"null\\\",\\n\\\"mapred.tasktracker.map.tasks.maximum\\\" : \\\"null\\\",\\n\\\"mapred.hosts.exclude\\\" : \\\"null\\\",\\n....\\n{noformat}",

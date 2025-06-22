@@ -1,28 +1,28 @@
 modules:
   jira:issueAction:
-    - key: task-assigning-hello-world-issue-action
+    - key: task-assignment-hello-world-issue-action
       resource: main
       resolver:
         function: resolver
       render: native
-      title: task-assigning
+      title: AI Task Assignment
   function:
     - key: resolver
       handler: index.handler
 resources:
   - key: main
     path: src/frontend/index.jsx
-app:
-  runtime:
-    name: nodejs22.x
-    memoryMB: 256
-    architecture: arm64
-  id: ari:cloud:ecosystem::app/59771d7b-74eb-450e-8ab5-62b98c1205e9
 permissions:
   scopes:
     - 'read:jira-work'
     - 'write:jira-work'
+    - 'read:jira-user'
   external:
     fetch:
       backend:
+        - '*.amazonaws.com'
         - '0sz41t116d.execute-api.us-east-1.amazonaws.com'
+app:
+  runtime:
+    name: nodejs22.x
+  id: ari:cloud:ecosystem::app/ac097c04-5ab1-4e19-9899-c9da896a401a

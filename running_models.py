@@ -10,6 +10,7 @@ from itertools import repeat
 import multiprocessing as mp
 import random
 import pickle 
+import math
 # River is the core online machine learning library
 from river import feature_extraction, compose, naive_bayes, multiclass, ensemble, drift, metrics,  linear_model ,tree, optim
 from parametars import TEST
@@ -68,18 +69,22 @@ def my_preprocess_data(raw_data):
 
 class MyOnlineModel:
     """
-    A blueprint for an o
-    nline machine learning model for issue assignment.
+    A blueprint for an online machine learning model for issue assignment.
     
     This class provides the core framework for:
     1. Feature extraction using TF-IDF.
     2. Tracking progressive accuracy.
     3. Detecting concept drift with ADWIN.
     """
-    def __init__(self, drift_delta=None):
+    def __init__(self, variables_to_use="all", drift_delta=None):
         
         # --- Part A: Define which features to use ---
-        feature_names = ["summary", "description", "labels", "components_name", "priority_name", "issue_type_name"]
+        if variables_to_use == "all":
+            # If "all" is specified, we use our standard set of features.
+            feature_names = ["summary", "description", "labels", "components_name", "priority_name", "issue_type_name"]
+        else:
+            # Otherwise, we use the specific list of features provided.
+            feature_names = variables_to_use
 
         # --- Part B: Set up the Drift Detector ---
         # The drift detector is optional. We only create it if a 'delta' value is given.
@@ -94,16 +99,16 @@ class MyOnlineModel:
         # The `on=name` tells each transformer which key to look for in the input dictionary.
         list_of_transformers = []
         for name in feature_names:
-            list_of_transformers.append(feature_extraction.TFIDF(on=name))
-
-        # `TransformerUnion` combines the outputs of all individual transformers
+            list_of_transformers.append(TFIDF_Calc(on=name))
+            
+        # `Tranformer_Union_CalcformerUnion` combines the outputs of all individual transformers
         # into a single, large feature vector. The '*' unpacks our list into arguments.
-        self.feature_pipeline = compose.TransformerUnion(*list_of_transformers)
+        self.feature_pipeline = Tranformer_Union_Calc(*list_of_transformers)
 
         # --- Part D: Initialize containers for results ---
         self.accuracies_over_time = []  # To store accuracy at each step
         self.detected_drifts_at = []    # To store the index 'i' where drift occurs
-        self.running_accuracy = metrics.Accuracy() # The river object to calculate rolling accuracy
+        self.running_accuracy = RollingAccuracyCalc() # Our custom accuracy calculator
         
         # This is a placeholder. The actual ML algorithm (e.g., Naive Bayes)
         # will be defined in the child classes that inherit from this one.
@@ -136,24 +141,14 @@ class MyOnlineModel:
         self.ml_model.learn_one(feature_vector, true_label)
         
         return predicted_label
+    
     def _update_accuracy(self, true_label, predicted_label):
         """Updates the rolling accuracy and stores its current value."""
-        # Update the river metric object with the latest result
+        # Update our custom metric object with the latest result
         self.running_accuracy.update(true_label, predicted_label)
-        
         # Append the new overall accuracy to our list for later plotting
         self.accuracies_over_time.append(self.running_accuracy.get())
         
-    # def _check_for_drift(self, issue_index):
-    #     """Updates the drift detector and stores the index if drift is found."""
-    #     # This check is only performed if a drift detector was created.
-    #     if self.drift_detector is not None:
-    #         # Give the detector the latest accuracy score to analyze.
-    #         self.drift_detector.update(self.running_accuracy.get())
-    #         # The detector's internal state will tell us if a change was detected.
-    #         if self.drift_detector.drift_detected:
-    #             self.detected_drifts_at.append(issue_index)
-
     def _check_for_drift(self, issue_index):
         if self.drift_detector is not None:
             # A more robust way to use ADWIN is to feed it a stream of 0s (error) and 1s (correct)
@@ -184,6 +179,147 @@ class MyOnlineModel:
             "accuracies": self.accuracies_over_time, 
             "drifts": self.detected_drifts_at
         }
+
+
+class TFIDF_Calc:
+    """
+    Custom implementation of TF-IDF (Term Frequency-Inverse Document Frequency)
+    without using built-in libraries.
+    """
+    def __init__(self, on=None):
+        self.on = on  # The feature name to extract from input dictionaries
+        self.vocab = {}  # Vocabulary to store term indices
+        self.doc_count = 0  # Total number of documents processed
+        self.term_doc_count = {}  # Number of documents containing each term
+        self.current_id = 0  # For assigning unique IDs to new terms
+        
+    def learn_one(self, x):
+        """Update the vocabulary and document frequencies with a new document."""
+        if self.on is not None:
+            text = x.get(self.on, "")
+        else:
+            text = x
+            
+        if not text:
+            return self
+        
+        self.doc_count += 1
+        terms = self._tokenize(text)
+        seen_terms = set()
+        
+        for term in terms:
+            # Add to vocabulary if new term
+            if term not in self.vocab:
+                self.vocab[term] = self.current_id
+                self.current_id += 1
+                self.term_doc_count[term] = 0
+            
+            # Update document frequency if we haven't seen this term in this doc yet
+            if term not in seen_terms:
+                self.term_doc_count[term] += 1
+                seen_terms.add(term)
+        
+        return self
+    
+    def transform_one(self, x):
+        """Transform a document into its TF-IDF vector representation."""
+        if self.on is not None:
+            text = x.get(self.on, "")
+        else:
+            text = x
+            
+        if not text or not self.vocab:
+            return {}
+            
+        terms = self._tokenize(text)
+        term_freq = {}
+        
+        # Calculate term frequencies (TF)
+        for term in terms:
+            if term in self.vocab:
+                term_freq[term] = term_freq.get(term, 0) + 1
+        
+        # Normalize TF by document length
+        doc_length = len(terms)
+        tf = {term: count/doc_length for term, count in term_freq.items()}
+        
+        # Calculate IDF and multiply by TF to get TF-IDF
+        tfidf = {}
+        for term, freq in tf.items():
+            idf = math.log((self.doc_count + 1) / (self.term_doc_count[term] + 1)) + 1
+            tfidf[self.vocab[term]] = freq * idf
+            
+        return tfidf
+    
+    def _tokenize(self, text):
+        """Simple tokenizer that splits on whitespace and converts to lowercase."""
+        if isinstance(text, str):
+            return text.lower().split()
+        elif isinstance(text, (list, tuple)):
+            return [str(item).lower() for item in text]
+        else:
+            return [str(text).lower()]
+
+
+class Tranformer_Union_Calc:
+    """
+    Custom implementation of a transformer union that combines multiple feature extractors.
+    """
+    def __init__(self, *transformers):
+        self.transformers = transformers
+        self.feature_offset = 0
+        self.offsets = []
+        
+        # Calculate offsets for each transformer's features
+        for transformer in transformers:
+            self.offsets.append(self.feature_offset)
+            # Assume each transformer will produce features starting from 0
+            # We'll need to track the maximum feature index somehow
+            # For simplicity, we'll assume they don't overlap (not ideal)
+            self.feature_offset += 1000  # Placeholder - real implementation would be more sophisticated
+    
+    def learn_one(self, x):
+        """Update each transformer with the new document."""
+        for transformer in self.transformers:
+            transformer.learn_one(x)
+        return self
+    
+    def transform_one(self, x):
+        """Combine the transformed features from all transformers."""
+        combined_features = {}
+        
+        for i, transformer in enumerate(self.transformers):
+            features = transformer.transform_one(x)
+            offset = self.offsets[i]
+            
+            # Apply offset to feature indices to avoid collisions
+            for feature_idx, value in features.items():
+                combined_features[feature_idx + offset] = value
+                
+        return combined_features
+
+
+class RollingAccuracyCalc:
+    """
+    Custom implementation of accuracy metric for online learning.
+    """
+    def __init__(self):
+        self.correct = 0
+        self.total = 0
+    
+    def update(self, y_true, y_pred):
+        """Update the accuracy metric with a new prediction."""
+        self.total += 1
+        if y_true == y_pred:
+            self.correct += 1
+    
+    def get(self):
+        """Return the current accuracy."""
+        return self.correct / self.total if self.total > 0 else 0.0
+    
+    def __repr__(self):
+        return f"Accuracy: {self.get():.4f}"
+
 
 # This class inherits from the MyOnlineModel we just wrote.
 # This means it gets all its methods (_transform_features, process_one_issue, etc.) automatically.

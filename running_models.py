@@ -5,7 +5,7 @@
 import os
 import json
 import pandas as pd
-from collections import defaultdict
+from collections import defaultdict, Counter
 from itertools import repeat
 import multiprocessing as mp
 import random
@@ -103,7 +103,9 @@ class MyOnlineModel:
             
         # `Tranformer_Union_CalcformerUnion` combines the outputs of all individual transformers
         # into a single, large feature vector. The '*' unpacks our list into arguments.
-        self.feature_pipeline = Tranformer_Union_Calc(*list_of_transformers)
+        # self.feature_pipeline = Tranformer_Union_Calc(*list_of_transformers)
+        self.feature_pipeline = compose.TransformerUnion(*list_of_transformers)
+
 
         # --- Part D: Initialize containers for results ---
         self.accuracies_over_time = []  # To store accuracy at each step
@@ -182,83 +184,96 @@ class MyOnlineModel:
 
 
 class TFIDF_Calc:
-    """
-    Custom implementation of TF-IDF (Term Frequency-Inverse Document Frequency)
-    without using built-in libraries.
-    """
-    def __init__(self, on=None):
-        self.on = on  # The feature name to extract from input dictionaries
-        self.vocab = {}  # Vocabulary to store term indices
-        self.doc_count = 0  # Total number of documents processed
-        self.term_doc_count = {}  # Number of documents containing each term
-        self.current_id = 0  # For assigning unique IDs to new terms
+    """Memory-efficient TF-IDF implementation with proper River compatibility."""
+    
+    def __init__(self, on=None, normalize=True):
+        self.on = on
+        self.normalize = normalize
+        self._reset_state()
+        
+    def _reset_state(self):
+        """Initialize or reset all learning state"""
+        self.vocab = {}
+        self.doc_count = 0
+        self.term_doc_count = defaultdict(int)
+        self.current_id = 0
         
     def learn_one(self, x):
-        """Update the vocabulary and document frequencies with a new document."""
-        if self.on is not None:
-            text = x.get(self.on, "")
-        else:
-            text = x
-            
+        text = self._get_text(x)
         if not text:
             return self
-        
+            
+        tokens = self._tokenize(text)
+        if not tokens:  # Skip empty token lists
+            return self
+            
         self.doc_count += 1
-        terms = self._tokenize(text)
         seen_terms = set()
-        
-        for term in terms:
-            # Add to vocabulary if new term
+        for term in tokens:
             if term not in self.vocab:
                 self.vocab[term] = self.current_id
                 self.current_id += 1
-                self.term_doc_count[term] = 0
-            
-            # Update document frequency if we haven't seen this term in this doc yet
             if term not in seen_terms:
                 self.term_doc_count[term] += 1
                 seen_terms.add(term)
-        
         return self
-    
-    def transform_one(self, x):
-        """Transform a document into its TF-IDF vector representation."""
-        if self.on is not None:
-            text = x.get(self.on, "")
-        else:
-            text = x
-            
-        if not text or not self.vocab:
+        
+    def transform_one(self, x: dict):
+        """
+        Transforms a single document into a TF-IDF sparse vector.
+        """
+        text = x.get(self.on, "")
+        tokens = self._tokenize(text)
+        
+        if not tokens:
             return {}
-            
-        terms = self._tokenize(text)
-        term_freq = {}
+
+        # 1. Calculate Term Frequencies (TF) for the current document
+        token_counts = Counter(tokens)
+        total_tokens_in_doc = len(tokens)
         
-        # Calculate term frequencies (TF)
-        for term in terms:
-            if term in self.vocab:
-                term_freq[term] = term_freq.get(term, 0) + 1
+        tfidf_vector = {}
         
-        # Normalize TF by document length
-        doc_length = len(terms)
-        tf = {term: count/doc_length for term, count in term_freq.items()}
+        for token, count in token_counts.items():
+            # Only generate features for words we have learned in the vocabulary
+            if token in self.vocabulary:
+                # Term Frequency calculation
+                tf = count / total_tokens_in_doc
+                
+                # 2. Calculate Inverse Document Frequency (IDF) using the global state
+                # We use a standard smoothed IDF formula to prevent division by zero
+                # and to moderate the weight of rare words.
+                # Formula: log((N+1) / (df+1)) + 1
+                # N = total documents seen, df = documents containing the term
+                df = self.doc_freqs.get(token, 0)
+                idf = math.log((self.doc_count + 1) / (df + 1)) + 1
+                
+                # 3. Combine to get TF-IDF score
+                feature_index = self.vocabulary[token]
+                tfidf_vector[feature_index] = tf * idf
         
-        # Calculate IDF and multiply by TF to get TF-IDF
+        return tfidf_vector 
+        
+        # Calculate TF-IDF
         tfidf = {}
+        N = self.doc_count
         for term, freq in tf.items():
-            idf = math.log((self.doc_count + 1) / (self.term_doc_count[term] + 1)) + 1
+            df = self.term_doc_count[term]
+            idf = math.log((1 + N) / (1 + df)) + 1
             tfidf[self.vocab[term]] = freq * idf
             
         return tfidf
-    
+        
+    def clone(self, include_attributes=True):
+        return TFIDF_Calc(on=self.on)
+        
+    def _get_text(self, x):
+        return x.get(self.on, "") if self.on is not None else x
+        
     def _tokenize(self, text):
-        """Simple tokenizer that splits on whitespace and converts to lowercase."""
         if isinstance(text, str):
             return text.lower().split()
-        elif isinstance(text, (list, tuple)):
-            return [str(item).lower() for item in text]
-        else:
-            return [str(text).lower()]
+        return [str(text).lower()]
 
 
 class Tranformer_Union_Calc:
@@ -470,7 +485,7 @@ class PassiveAggressiveModel(MyOnlineModel):
         # PassiveAggressiveClassifier is a linear model, wrapped in OneVsRest
         # to handle the multi-class assignment problem.
         self.ml_model = multiclass.OneVsRestClassifier(
-            classifier=linear_model.PassiveAggressiveClassifier(C=0.01, mode=1)
+            classifier=linear_model.PAClassifier(C=0.01, mode=1)
         )
         # Note: We don't need to override process_one_issue. The parent's default works perfectly.
 
@@ -1097,7 +1112,7 @@ if __name__ == '__main__':
 
     if MODE == 'experiment':
         print("Script execution started in EXPERIMENT mode.")
-        models_to_test = [MySuperEnhancedModel]
+        models_to_test = [MyNaiveBayesModel]
         # Dynamically find all project CSVs in the data folder
         try:
             projects_to_process = [f[:-4] for f in os.listdir(DATA_FOLDER) if f.endswith(".csv") and "name_mapping" not in f]

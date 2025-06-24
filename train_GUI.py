@@ -41,15 +41,11 @@ class MyOnlineModel:
     2. Tracking progressive accuracy.
     3. Detecting concept drift with ADWIN.
     """
-    def __init__(self, variables_to_use="all", drift_delta=None):
+    def __init__(self, drift_delta=None):
         
         # --- Part A: Define which features to use ---
-        if variables_to_use == "all":
-            # If "all" is specified, we use our standard set of features.
-            feature_names = ["summary", "description", "labels", "components_name", "priority_name", "issue_type_name"]
-        else:
-            # Otherwise, we use the specific list of features provided.
-            feature_names = variables_to_use
+
+        feature_names = ["summary", "description", "labels", "components_name", "priority_name", "issue_type_name"]
 
         # --- Part B: Set up the Drift Detector ---
         # The drift detector is optional. We only create it if a 'delta' value is given.

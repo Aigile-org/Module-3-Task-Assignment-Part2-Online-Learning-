@@ -76,15 +76,10 @@ class MyOnlineModel:
     2. Tracking progressive accuracy.
     3. Detecting concept drift with ADWIN.
     """
-    def __init__(self, variables_to_use="all", drift_delta=None):
+    def __init__(self, drift_delta=None):
         
         # --- Part A: Define which features to use ---
-        if variables_to_use == "all":
-            # If "all" is specified, we use our standard set of features.
-            feature_names = ["summary", "description", "labels", "components_name", "priority_name", "issue_type_name"]
-        else:
-            # Otherwise, we use the specific list of features provided.
-            feature_names = variables_to_use
+        feature_names = ["summary", "description", "labels", "components_name", "priority_name", "issue_type_name"]
 
         # --- Part B: Set up the Drift Detector ---
         # The drift detector is optional. We only create it if a 'delta' value is given.
@@ -104,7 +99,7 @@ class MyOnlineModel:
         # `Tranformer_Union_CalcformerUnion` combines the outputs of all individual transformers
         # into a single, large feature vector. The '*' unpacks our list into arguments.
         # self.feature_pipeline = Tranformer_Union_Calc(*list_of_transformers)
-        self.feature_pipeline = compose.TransformerUnion(*list_of_transformers)
+        self.feature_pipeline = TransformUnion_calc(*list_of_transformers)
 
 
         # --- Part D: Initialize containers for results ---
@@ -186,38 +181,44 @@ class MyOnlineModel:
 class TFIDF_Calc:
     """Memory-efficient TF-IDF implementation with proper River compatibility."""
     
-    def __init__(self, on=None, normalize=True):
+    def __init__(self, on: str):
+        """
+        Args:
+            on (str): The key corresponding to the text field in the input dictionary.
+        """
         self.on = on
-        self.normalize = normalize
-        self._reset_state()
         
-    def _reset_state(self):
-        """Initialize or reset all learning state"""
-        self.vocab = {}
+        # State-tracking variables for online learning
         self.doc_count = 0
-        self.term_doc_count = defaultdict(int)
-        self.current_id = 0
-        
-    def learn_one(self, x):
-        text = self._get_text(x)
-        if not text:
-            return self
-            
+        self.doc_freqs = {}  # Stores document frequency for each term
+        self.vocabulary = {} # Maps each term to a unique feature index
+        self._next_vocab_idx = 0
+
+    def _tokenize(self, text: str):
+        """A simple tokenizer. A more advanced version could use regex or a library."""
+        return text.lower().split()
+
+    def learn_one(self, x: dict):
+        """
+        Updates the internal state based on a single document.
+        This includes document count, document frequencies, and the vocabulary.
+        """
+        text = x.get(self.on, "")
         tokens = self._tokenize(text)
-        if not tokens:  # Skip empty token lists
-            return self
-            
+
+        # Increment total document count
         self.doc_count += 1
-        seen_terms = set()
-        for term in tokens:
-            if term not in self.vocab:
-                self.vocab[term] = self.current_id
-                self.current_id += 1
-            if term not in seen_terms:
-                self.term_doc_count[term] += 1
-                seen_terms.add(term)
-        return self
         
+        # Update document frequencies for unique tokens in this document
+        for token in set(tokens):
+            self.doc_freqs[token] = self.doc_freqs.get(token, 0) + 1
+            # Add new tokens to the vocabulary
+            if token not in self.vocabulary:
+                self.vocabulary[token] = self._next_vocab_idx
+                self._next_vocab_idx += 1
+        
+        return self
+
     def transform_one(self, x: dict):
         """
         Transforms a single document into a TF-IDF sparse vector.
@@ -252,17 +253,7 @@ class TFIDF_Calc:
                 feature_index = self.vocabulary[token]
                 tfidf_vector[feature_index] = tf * idf
         
-        return tfidf_vector 
-        
-        # Calculate TF-IDF
-        tfidf = {}
-        N = self.doc_count
-        for term, freq in tf.items():
-            df = self.term_doc_count[term]
-            idf = math.log((1 + N) / (1 + df)) + 1
-            tfidf[self.vocab[term]] = freq * idf
-            
-        return tfidf
+        return tfidf_vector
         
     def clone(self, include_attributes=True):
         return TFIDF_Calc(on=self.on)
@@ -275,41 +266,48 @@ class TFIDF_Calc:
             return text.lower().split()
         return [str(text).lower()]
 
-
-class Tranformer_Union_Calc:
+class TransformUnion_calc:
     """
-    Custom implementation of a transformer union that combines multiple feature extractors.
+    A custom implementation of an online transformer union.
+    
+    This class takes multiple transformer objects and applies them in parallel.
+    It combines their resulting feature dictionaries into a single, larger one,
+    ensuring feature keys are unique by prefixing them with the transformer's name.
     """
     def __init__(self, *transformers):
+        """
+        Args:
+            *transformers: A variable number of transformer objects. Each object
+                         is expected to have `learn_one`, `transform_one` methods,
+                         and an `on` attribute to identify its input field.
+        """
         self.transformers = transformers
-        self.feature_offset = 0
-        self.offsets = []
-        
-        # Calculate offsets for each transformer's features
-        for transformer in transformers:
-            self.offsets.append(self.feature_offset)
-            # Assume each transformer will produce features starting from 0
-            # We'll need to track the maximum feature index somehow
-            # For simplicity, we'll assume they don't overlap (not ideal)
-            self.feature_offset += 1000  # Placeholder - real implementation would be more sophisticated
-    
-    def learn_one(self, x):
-        """Update each transformer with the new document."""
+
+    def learn_one(self, x: dict):
+        """Calls `learn_one` on each internal transformer."""
         for transformer in self.transformers:
             transformer.learn_one(x)
         return self
-    
-    def transform_one(self, x):
-        """Combine the transformed features from all transformers."""
-        combined_features = {}
+
+    def transform_one(self, x: dict):
+        """
+        Calls `transform_one` on each transformer and merges the results.
         
-        for i, transformer in enumerate(self.transformers):
-            features = transformer.transform_one(x)
-            offset = self.offsets[i]
+        Feature keys are made unique by prefixing them with the name of the
+        field the transformer operated on (e.g., 'summary_0', 'description_15').
+        """
+        combined_features = {}
+        for transformer in self.transformers:
+            # Get the sparse feature vector from the individual transformer
+            individual_features = transformer.transform_one(x)
             
-            # Apply offset to feature indices to avoid collisions
-            for feature_idx, value in features.items():
-                combined_features[feature_idx + offset] = value
+            # Get the name of the feature field to use as a prefix
+            prefix = transformer.on
+            
+            # Merge the features, creating a new, unique key for each
+            for key, value in individual_features.items():
+                new_key = f"{prefix}_{key}"
+                combined_features[new_key] = value
                 
         return combined_features
 

@@ -78,8 +78,9 @@ class MyOnlineModel:
     """
     def __init__(self, drift_delta=None):
         
-        # --- Part A: Define which features to use ---
+       
         feature_names = ["summary", "description", "labels", "components_name", "priority_name", "issue_type_name"]
+
 
         # --- Part B: Set up the Drift Detector ---
         # The drift detector is optional. We only create it if a 'delta' value is given.
@@ -98,14 +99,21 @@ class MyOnlineModel:
             
         # `Tranformer_Union_CalcformerUnion` combines the outputs of all individual transformers
         # into a single, large feature vector. The '*' unpacks our list into arguments.
-        # self.feature_pipeline = Tranformer_Union_Calc(*list_of_transformers)
         self.feature_pipeline = TransformUnion_calc(*list_of_transformers)
-
 
         # --- Part D: Initialize containers for results ---
         self.accuracies_over_time = []  # To store accuracy at each step
+        self.precisions_over_time = []
+        self.recalls_over_time = []
+        self.f1_scores_over_time = []
         self.detected_drifts_at = []    # To store the index 'i' where drift occurs
-        self.running_accuracy = RollingAccuracyCalc() # Our custom accuracy calculator
+        # Initialize metric trackers
+        self.running_metrics = {
+            'accuracy': RollingAccuracyCalc(),
+            'precision': RollingPrecisionCalc(),
+            'recall': RollingRecallCalc(),
+            'f1': RollingF1Calc()
+        }
         
         # This is a placeholder. The actual ML algorithm (e.g., Naive Bayes)
         # will be defined in the child classes that inherit from this one.
@@ -139,17 +147,17 @@ class MyOnlineModel:
         
         return predicted_label
     
-    def _update_accuracy(self, true_label, predicted_label):
-        """Updates the rolling accuracy and stores its current value."""
-        # Update our custom metric object with the latest result
-        self.running_accuracy.update(true_label, predicted_label)
-        # Append the new overall accuracy to our list for later plotting
-        self.accuracies_over_time.append(self.running_accuracy.get())
+    # def _update_accuracy(self, true_label, predicted_label):
+    #     """Updates the rolling accuracy and stores its current value."""
+    #     # Update our custom metric object with the latest result
+    #     self.running_accuracy.update(true_label, predicted_label)
+    #     # Append the new overall accuracy to our list for later plotting
+    #     self.accuracies_over_time.append(self.running_accuracy.get())
         
     def _check_for_drift(self, issue_index):
         if self.drift_detector is not None:
             # A more robust way to use ADWIN is to feed it a stream of 0s (error) and 1s (correct)
-            is_correct = 1 if self.running_accuracy.get() > (self.accuracies_over_time[-2] if len(self.accuracies_over_time) > 1 else 0) else 0
+            is_correct = 1 if self.running_metrics['accuracy'].get() > (self.accuracies_over_time[-2] if len(self.accuracies_over_time) > 1 else 0) else 0
             self.drift_detector.update(is_correct)
             if self.drift_detector.drift_detected:
                 self.detected_drifts_at.append(issue_index)
@@ -165,17 +173,98 @@ class MyOnlineModel:
         prediction = self._predict_and_learn(feature_vector, issue_label)
         
         # Step 3: Update our performance metrics.
-        self._update_accuracy(issue_label, prediction)
+        self._update_metrics(issue_label, prediction)
         self._check_for_drift(issue_index)
         
         return prediction
 
+    def _update_metrics(self, true_label, predicted_label):
+            """Updates all metrics and stores their current values."""
+            # Update all metric objects
+            for metric in self.running_metrics.values():
+                metric.update(true_label, predicted_label)
+            
+            # Append the new metrics to our lists
+            self.accuracies_over_time.append(self.running_metrics['accuracy'].get())
+            self.precisions_over_time.append(self.running_metrics['precision'].get())
+            self.recalls_over_time.append(self.running_metrics['recall'].get())
+            self.f1_scores_over_time.append(self.running_metrics['f1'].get())
+
     def get_results(self):
         """Returns the final results of the simulation run."""
         return {
-            "accuracies": self.accuracies_over_time, 
+            "accuracies": self.accuracies_over_time,
+            "precisions": self.precisions_over_time,
+            "recalls": self.recalls_over_time,
+            "f1_scores": self.f1_scores_over_time,
             "drifts": self.detected_drifts_at
         }
+
+class RollingPrecisionCalc:
+    def __init__(self):
+        self.true_positives = 0
+        self.false_positives = 0
+    
+    def update(self, y_true, y_pred):
+        if y_pred == y_true:
+            self.true_positives += 1
+        elif y_pred != y_true:
+            self.false_positives += 1
+    
+    def get(self):
+        denominator = self.true_positives + self.false_positives
+        return self.true_positives / denominator if denominator > 0 else 0.0
+
+class RollingRecallCalc:
+    def __init__(self):
+        self.true_positives = 0
+        self.false_negatives = 0
+    
+    def update(self, y_true, y_pred):
+        if y_pred == y_true:
+            self.true_positives += 1
+        elif y_pred != y_true and y_pred != "correct_prediction":  # Adjust based on your labels
+            self.false_negatives += 1
+    
+    def get(self):
+        denominator = self.true_positives + self.false_negatives
+        return self.true_positives / denominator if denominator > 0 else 0.0
+
+class RollingF1Calc:
+    def __init__(self):
+        self.precision_calc = RollingPrecisionCalc()
+        self.recall_calc = RollingRecallCalc()
+    
+    def update(self, y_true, y_pred):
+        self.precision_calc.update(y_true, y_pred)
+        self.recall_calc.update(y_true, y_pred)
+    
+    def get(self):
+        precision = self.precision_calc.get()
+        recall = self.recall_calc.get()
+        denominator = precision + recall
+        return 2 * (precision * recall) / denominator if denominator > 0 else 0.0
+
+class RollingAccuracyCalc:
+    """
+    Custom implementation of accuracy metric for online learning.
+    """
+    def __init__(self):
+        self.correct = 0
+        self.total = 0
+    
+    def update(self, y_true, y_pred):
+        """Update the accuracy metric with a new prediction."""
+        self.total += 1
+        if y_true == y_pred:
+            self.correct += 1
+    
+    def get(self):
+        """Return the current accuracy."""
+        return self.correct / self.total if self.total > 0 else 0.0
+    
+    def __repr__(self):
+        return f"Accuracy: {self.get():.4f}"
 
 
 class TFIDF_Calc:
@@ -310,28 +399,6 @@ class TransformUnion_calc:
                 combined_features[new_key] = value
                 
         return combined_features
-
-
-class RollingAccuracyCalc:
-    """
-    Custom implementation of accuracy metric for online learning.
-    """
-    def __init__(self):
-        self.correct = 0
-        self.total = 0
-    
-    def update(self, y_true, y_pred):
-        """Update the accuracy metric with a new prediction."""
-        self.total += 1
-        if y_true == y_pred:
-            self.correct += 1
-    
-    def get(self):
-        """Return the current accuracy."""
-        return self.correct / self.total if self.total > 0 else 0.0
-    
-    def __repr__(self):
-        return f"Accuracy: {self.get():.4f}"
 
 
 # This class inherits from the MyOnlineModel we just wrote.
@@ -610,7 +677,7 @@ class MyEnhancedModel(MyOnlineModel):
 
         # --- Step C: Check for Drift and Adapt Intelligently ---
         if self.drift_detector is not None:
-            self.drift_detector.update(self.running_accuracy.get())
+            self.drift_detector.update(self.running_metrics['accuracy'].get())
             
             if self.drift_detector.drift_detected:
                 self.detected_drifts_at.append(issue_index)
@@ -861,7 +928,7 @@ def run_single_experiment(model_class, project_name):
         )
 
     # --- Step F: Report the final performance summary ---
-    final_accuracy = model.running_accuracy.get()
+    final_accuracy = model.running_metrics['accuracy'].get()
     total_drifts = len(model.detected_drifts_at)
     
     # This print statement can be helpful but will clutter the logs in parallel runs.
@@ -1005,7 +1072,7 @@ def run_deployment_simulation(training_project: str, test_file_path: str, use_pr
         for i, (features, label) in enumerate(zip(features_stream, labels_stream)):
             model.process_one_issue(issue_index=i, issue_features=features, issue_label=label)
             
-        print(f"Model pre-training complete. Final accuracy on training data: {model.running_accuracy.get():.4f}")
+        print(f"Model pre-training complete. Final accuracy on training data: {model.running_metrics['accuracy'].get():.4f}")
         
         # Save the trained model for future use
         save_model(model, training_project)
@@ -1013,7 +1080,7 @@ def run_deployment_simulation(training_project: str, test_file_path: str, use_pr
         print("\nUsing pre-trained model. Skipping training phase.")
     
     print("\nThe model is now 'live' and ready for new issues.")
-    print(f"Current model accuracy: {model.running_accuracy.get():.2%}\n")
+    print(f"Current model accuracy: {model.running_metrics['accuracy'].get():.2%}\n")
 
     # --- Step 3: Process new issues interactively ---
     print(f"\n[PHASE 2] Processing new issues from test file: '{test_file_path}'...")
@@ -1054,7 +1121,7 @@ def run_deployment_simulation(training_project: str, test_file_path: str, use_pr
         model.learn_from_assignment(feature_vector, true_label, issue_index=learning_index)
         
         # Print updated accuracy
-        current_accuracy = model.running_accuracy.get()
+        current_accuracy = model.running_metrics['accuracy'].get()
         print(f"\n  Feedback received. Model has learned from assigning the issue to '{true_label}'.")
         print(f"  Updated model accuracy: {current_accuracy:.2%}")
         save_model(model,training_project)

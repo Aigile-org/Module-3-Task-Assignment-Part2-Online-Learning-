@@ -1,2 +1,0 @@
-TRAIN = True
-TEST = True

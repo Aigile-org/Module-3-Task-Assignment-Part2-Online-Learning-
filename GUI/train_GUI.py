@@ -20,7 +20,6 @@ import random
 import pickle 
 # River is the core online machine learning library
 from river import feature_extraction, compose, naive_bayes, multiclass, ensemble, drift, metrics,  linear_model ,tree
-from parametars import TEST
 
 
 # AWS S3 imports
@@ -31,7 +30,7 @@ from botocore.exceptions import ClientError, NoCredentialsError
 #  1. CORE JIRA LOGIC (Two separate functions for Train and Test modes)
 # ==============================================================================
 ####################################
-class MyOnlineModel:
+class OnlineInterface:
     """
     A blueprint for an o
     nline machine learning model for issue assignment.
@@ -102,7 +101,6 @@ class MyOnlineModel:
         self.ml_model.learn_one(feature_vector, true_label)
         
         return predicted_label
-    #TODO:: Know How Its calculated ( Progressive Accuracy ) 
     def _update_accuracy(self, true_label, predicted_label):
         """Updates the rolling accuracy and stores its current value."""
         # Update the river metric object with the latest result
@@ -120,7 +118,6 @@ class MyOnlineModel:
     #         # The detector's internal state will tell us if a change was detected.
     #         if self.drift_detector.drift_detected:
     #             self.detected_drifts_at.append(issue_index)
-    #TODO:: Understand This
     def _check_for_drift(self, issue_index):
         if self.drift_detector is not None:
             # A more robust way to use ADWIN is to feed it a stream of 0s (error) and 1s (correct)
@@ -189,7 +186,7 @@ def my_preprocess_data(raw_data):
     return x_features_stream, y_target
 
 
-class MySuperEnhancedModel(MyOnlineModel):
+class EnhancedAdaboost(OnlineInterface):
     """
     A "super" enhanced version of the original AdaBoost model.
     It now includes methods for a real-world deployment scenario where
@@ -197,12 +194,12 @@ class MySuperEnhancedModel(MyOnlineModel):
     """
     def __init__(self, alpha=0.1, delta=0.15, n_models=10, name_mapping=None,**kwargs):
         # This super().__init__() call correctly initializes the pipeline
-        # from MyOnlineModel, which looks for 'summary', 'description', etc.
+        # from OnlineInterface, which looks for 'summary', 'description', etc.
         super().__init__(drift_delta=delta, **kwargs)
         self.name_mapping = name_mapping or []
 
         
-        self.name = "My_Super_Enhanced_Model"
+        self.name = "Enhanced_Adaboost"
         
         base_learner = multiclass.OneVsRestClassifier(naive_bayes.MultinomialNB(alpha=alpha))
         self.ml_model = ensemble.AdaBoostClassifier(model=base_learner, n_models=n_models, seed=42)
@@ -375,7 +372,7 @@ def fetch_train_and_upload(config, output_queue):
     try:
         JIRA_URL, JIRA_EMAIL, API_TOKEN, PROJECT_KEY = config['url'], config['email'], config['token'], config['project']
         S3_BUCKET = config.get('s3_bucket', 'aigile-bucket')
-        S3_KEY = config.get('s3_key', 'My_Super_Enhanced_Model_AMBARI.pkl')
+        S3_KEY = config.get('s3_key', 'Enhanced_Adaboost_AMBARI.pkl')
         
         output_queue.put(f"🔄 TRAIN MODE: Fetching all issues from project: {PROJECT_KEY}...")
         
@@ -462,7 +459,7 @@ def fetch_train_and_upload(config, output_queue):
         output_queue.put("🤖 Training model...")
         try:
             # Import required classes from running_models
-            # from running_models import MySuperEnhancedModel, my_preprocess_data
+            # from running_models import EnhancedAdaboost, my_preprocess_data
             
             # Convert JSON data to DataFrame for processing
             df = pd.DataFrame(transformed_issues_list)
@@ -472,7 +469,7 @@ def fetch_train_and_upload(config, output_queue):
             output_queue.put(f"📊 Preprocessing complete - {len(features_stream)} training samples")
             
             # Create and train the model with proper name mapping
-            model = MySuperEnhancedModel(name_mapping=name_mapping)
+            model = EnhancedAdaboost(name_mapping=name_mapping)
             
             # Train the model with all the data
             for i, (issue_features, true_label) in enumerate(zip(features_stream, labels_stream)):
@@ -606,7 +603,7 @@ class JiraTrainerApp:
 
         s3_fields = {
             "S3_BUCKET": ("S3 Bucket:", "aigile-bucket", False),
-            "S3_KEY": ("S3 Model Key:", "My_Super_Enhanced_Model_AMBARI.pkl", False),
+            "S3_KEY": ("S3 Model Key:", "Enhanced_Adaboost_AMBARI.pkl", False),
         }
         for i, (key, (label_text, default_value, is_secret)) in enumerate(s3_fields.items()):
             label = ttk.Label(s3_frame, text=label_text)

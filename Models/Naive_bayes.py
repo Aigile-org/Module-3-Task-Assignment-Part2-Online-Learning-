@@ -1,5 +1,5 @@
 
-from running_models import MyOnlineModel
+from running_models import OnlineInterface
 import pandas as pd
 from collections import defaultdict
 from itertools import repeat
@@ -7,11 +7,7 @@ import math
 from collections import defaultdict
 from typing import Dict, Any, Optional, Set
 import numpy as np
-class MyNaiveBayesModel(MyOnlineModel):
-    """
-    EXACT reimplementation of River's MultinomialNB that will produce identical results.
-    Verified against River 0.15.0 source code.
-    """
+class NaiveBayesModel(OnlineInterface):
     def __init__(self, alpha=1.0):
         super().__init__()
         

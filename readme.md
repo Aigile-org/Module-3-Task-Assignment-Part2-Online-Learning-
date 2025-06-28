@@ -19,7 +19,7 @@ This generates CSV training files for each project
 1. Configure `running_models.py`:
 - Set `MODE = 'e'` (Experiment mode)
 - Add models to evaluate in `models_to_test` list
-  Example: `models_to_test = [MySuperEnhancedModel, HoeffdingAdaptiveTreeModel]`
+  Example: `models_to_test = [EnhancedAdaboost, HoeffdingAdaptiveTreeModel]`
 - Specify projects in `projects_to_process` (use `.csv` for all projects)
 
 2. Run training: python running_models.py

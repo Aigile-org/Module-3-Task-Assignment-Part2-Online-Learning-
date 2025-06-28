@@ -68,7 +68,7 @@ const callMLPredictionAPI = async (issueData) => {
       return {
         predictions: recommendations,
         modelInfo: {
-          modelType: result.prediction.model_type || 'My_Super_Enhanced_Model',
+          modelType: result.prediction.model_type || 'Enhanced_Adaboost',
           version: '1.0',
           trainingDate: 'Latest',
           totalFeatures: 'Multiple',

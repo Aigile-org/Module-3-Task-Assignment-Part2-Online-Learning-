@@ -29,7 +29,7 @@ except ImportError as e:
 # Model Class Definitions (needed for pickle unpickling)
 # ==============================================================================
 
-class MyOnlineModel:
+class OnlineInterface:
     """
     A blueprint for an online machine learning model for issue assignment.
     
@@ -110,7 +110,7 @@ class MyOnlineModel:
         self.accuracies_over_time.append(self.running_accuracy.get())
 
 
-class MySuperEnhancedModel(MyOnlineModel):
+class EnhancedAdaboost(OnlineInterface):
     """
     A "super" enhanced version of the original AdaBoost model.
     It now includes methods for a real-world deployment scenario where
@@ -118,11 +118,11 @@ class MySuperEnhancedModel(MyOnlineModel):
     """
     def __init__(self, alpha=0.1, delta=0.15, n_models=10, name_mapping=None, **kwargs):
         # This super().__init__() call correctly initializes the pipeline
-        # from MyOnlineModel, which looks for 'summary', 'description', etc.
+        # from OnlineInterface, which looks for 'summary', 'description', etc.
         super().__init__(drift_delta=delta, **kwargs)
         self.name_mapping = name_mapping or []
 
-        self.name = "My_Super_Enhanced_Model"
+        self.name = "Enhanced_Adaboost"
         
         if RIVER_AVAILABLE:
             base_learner = multiclass.OneVsRestClassifier(naive_bayes.MultinomialNB(alpha=alpha))
@@ -260,7 +260,7 @@ class MySuperEnhancedModel(MyOnlineModel):
                 "model_type": self.name
             }
         except Exception as e:
-            logger.error(f"Prediction error in MySuperEnhancedModel: {str(e)}")
+            logger.error(f"Prediction error in EnhancedAdaboost: {str(e)}")
             return {
                 "recommendations": ["unassigned"],
                 "error": str(e),
@@ -288,7 +288,7 @@ class MySuperEnhancedModel(MyOnlineModel):
                 "prediction_result": result
             }
         except Exception as e:
-            logger.error(f"Learning error in MySuperEnhancedModel: {str(e)}")
+            logger.error(f"Learning error in EnhancedAdaboost: {str(e)}")
             return {
                 "success": False,
                 "error": str(e),                "assignee": assignee
@@ -322,7 +322,7 @@ def load_model_from_s3():
     """Load the River model from S3 bucket using local file download."""
     
     bucket_name = "aigile-bucket"
-    model_key = "My_Super_Enhanced_Model_AMBARI.pkl"
+    model_key = "Enhanced_Adaboost_AMBARI.pkl"
     local_model_path = "/tmp/model.pkl"  # Lambda /tmp directory
     
     try:
@@ -339,10 +339,10 @@ def load_model_from_s3():
         logger.info(f"Loading model from local file: {local_model_path}")
         
         # CRITICAL FIX: Register our classes in __main__ module so pickle can find them
-        # This solves the "Can't get attribute 'MySuperEnhancedModel' on <module '__main__'" error
+        # This solves the "Can't get attribute 'EnhancedAdaboost' on <module '__main__'" error
         logger.info("Registering model classes in __main__ module for pickle compatibility...")
-        sys.modules['__main__'].MyOnlineModel = MyOnlineModel
-        sys.modules['__main__'].MySuperEnhancedModel = MySuperEnhancedModel
+        sys.modules['__main__'].OnlineInterface = OnlineInterface
+        sys.modules['__main__'].EnhancedAdaboost = EnhancedAdaboost
         
         with open(local_model_path, 'rb') as f:
             loaded_data = pickle.load(f)
@@ -367,9 +367,9 @@ def load_model_from_s3():
                 model_instance = loaded_data[key]
                 logger.info(f"Found model in '{key}' key, type: {type(model_instance)}")
             else:
-                # Try to find a MySuperEnhancedModel object in the dictionary
+                # Try to find a EnhancedAdaboost object in the dictionary
                 for key, value in loaded_data.items():
-                    if hasattr(value, 'predict_assignment') or isinstance(value, MySuperEnhancedModel):
+                    if hasattr(value, 'predict_assignment') or isinstance(value, EnhancedAdaboost):
                         model_instance = value
                         logger.info(f"Found model object in '{key}' key, type: {type(model_instance)}")
                         break
@@ -377,7 +377,7 @@ def load_model_from_s3():
                     # If no model found, raise an error
                     raise Exception(f"Could not find model object in dictionary. Available keys: {list(loaded_data.keys())}")
                     
-        elif hasattr(loaded_data, 'predict_assignment') or isinstance(loaded_data, MySuperEnhancedModel):
+        elif hasattr(loaded_data, 'predict_assignment') or isinstance(loaded_data, EnhancedAdaboost):
             # Direct model object
             model_instance = loaded_data
             logger.info(f"Direct model object loaded, type: {type(model_instance)}")
@@ -387,9 +387,9 @@ def load_model_from_s3():
         # Verify the model has the required methods
         if not hasattr(model_instance, 'predict_assignment'):
             logger.warning(f"Model type {type(model_instance)} doesn't have predict_assignment method")
-            # Try to add the method if it's a MySuperEnhancedModel but missing the method
-            if isinstance(model_instance, MySuperEnhancedModel):
-                logger.warning("Model is MySuperEnhancedModel but missing predict_assignment method")
+            # Try to add the method if it's a EnhancedAdaboost but missing the method
+            if isinstance(model_instance, EnhancedAdaboost):
+                logger.warning("Model is EnhancedAdaboost but missing predict_assignment method")
           # Clean up the temporary file
         try:
             os.remove(local_model_path)
@@ -415,7 +415,7 @@ def save_model_to_s3(model):
     global model_last_modified
     
     bucket_name = "aigile-bucket"
-    model_key = "My_Super_Enhanced_Model_AMBARI.pkl"
+    model_key = "Enhanced_Adaboost_AMBARI.pkl"
     local_model_path = "/tmp/model_save.pkl"  # Lambda /tmp directory
     
     try:
@@ -504,7 +504,7 @@ def lambda_handler(event, context):
                     'model_loaded': model_loaded,
                     'model_type': model_type,
                     'bucket': 'aigile-bucket',
-                    'model_file': 'My_Super_Enhanced_Model_AMBARI.pkl'
+                    'model_file': 'Enhanced_Adaboost_AMBARI.pkl'
                 })
             }
         
